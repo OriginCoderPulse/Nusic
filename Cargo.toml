@@ -5,6 +5,8 @@ edition = "2021"
 description = "Cross-platform terminal music player for local files"
 license = "MIT"
 rust-version = "1.75"
+homepage = "https://github.com/OriginCoderPulse/Music"
+repository = "https://github.com/OriginCoderPulse/Music"
 
 [[bin]]
 name = "nusic"
