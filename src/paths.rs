@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-/// Default folder for local music files (`~/.config/nusic`).
+/// Default folder for local music files (`~/.music`).
 pub fn music_dir() -> PathBuf {
     dirs::home_dir()
-        .map(|home| home.join(".config").join("nusic"))
-        .unwrap_or_else(|| PathBuf::from(".config/nusic"))
+        .map(|home| home.join(".music"))
+        .unwrap_or_else(|| PathBuf::from(".music"))
 }
 
 pub fn ensure_music_dir() -> anyhow::Result<PathBuf> {

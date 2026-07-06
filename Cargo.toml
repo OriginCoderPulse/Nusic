@@ -1,6 +1,6 @@
 [package]
 name = "nusic"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Cross-platform terminal music player for local files"
 license = "MIT"

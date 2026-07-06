@@ -89,6 +89,56 @@ fn draw(frame: &mut Frame, app: &mut App, dt: Duration) {
     if app.search_mode {
         draw_search(frame, area, app, &theme);
     }
+
+    if app.help_mode {
+        draw_help(frame, area, &theme);
+    }
+}
+
+fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let rows: &[(&str, &str)] = &[
+        ("Space", "Play / pause"),
+        ("Enter", "Play selected track"),
+        ("n / ]", "Next track"),
+        ("p / [", "Previous track"),
+        ("j / ↓", "Move selection down"),
+        ("↑", "Move selection up"),
+        ("← / →", "Move selection"),
+        ("PgUp / PgDn", "Move 10 items"),
+        ("Home / End", "First / last track"),
+        ("h / l", "Volume down / up"),
+        ("+ / -", "Volume up / down"),
+        ("s", "Toggle shuffle"),
+        ("r", "Cycle repeat mode"),
+        ("/", "Search library"),
+        ("o", "Open music folder"),
+        ("k", "Show / hide this help"),
+        ("q / Esc", "Quit"),
+        ("Ctrl+s", "Quit"),
+    ];
+
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|(key, desc)| {
+            Line::from(vec![
+                Span::styled(format!(" {key:<12}"), theme.accent),
+                Span::raw(" "),
+                Span::styled(*desc, theme.text),
+            ])
+        })
+        .collect();
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let popup = centered_rect(58, height, area);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(theme.accent)
+            .title(Line::from(Span::styled(" Shortcuts ", theme.subtitle))),
+        popup,
+    );
+    frame.render_widget(Paragraph::new(lines), popup.inner(Margin::new(1, 1)));
 }
 
 fn draw_search(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -133,6 +183,9 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    if app.help_mode {
+        return handle_help_key(app, key);
+    }
     if app.search_mode {
         return handle_search_key(app, key);
     }
@@ -154,16 +207,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('s') => app.toggle_shuffle(),
         KeyCode::Char('r') => app.cycle_repeat(),
         KeyCode::Char('o') => app.open_music_dir(),
+        KeyCode::Char('k') => app.help_mode = !app.help_mode,
         KeyCode::Char('/') => {
             app.search_mode = true;
             app.search_query.clear();
         }
         KeyCode::Char('+') | KeyCode::Char('=') => app.adjust_volume(0.05),
         KeyCode::Char('-') | KeyCode::Char('_') => app.adjust_volume(-0.05),
+        KeyCode::Char('h') => app.adjust_volume(-0.05),
+        KeyCode::Char('l') => app.adjust_volume(0.05),
         KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-        KeyCode::Char('h') | KeyCode::Left => app.move_selection(-1),
-        KeyCode::Char('l') | KeyCode::Right => app.move_selection(1),
+        KeyCode::Up => app.move_selection(-1),
+        KeyCode::Left => app.move_selection(-1),
+        KeyCode::Right => app.move_selection(1),
         KeyCode::PageUp => app.move_selection(-10),
         KeyCode::PageDown => app.move_selection(10),
         KeyCode::Home => app.select_first(),
@@ -172,6 +228,14 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         _ => {}
     }
 
+    false
+}
+
+fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('k') => app.help_mode = false,
+        _ => {}
+    }
     false
 }
 
