@@ -4,7 +4,7 @@
 
 **在终端里优雅地播放本地音乐**
 
-[![Version](https://img.shields.io/badge/版本-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Music/releases/tag/v0.1.3)
+[![Version](https://img.shields.io/badge/版本-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.1.3)
 [![License](https://img.shields.io/badge/协议-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-安装)
@@ -66,8 +66,8 @@ brew install nusic
 需要 **Rust 1.75+**。
 
 ```bash
-git clone https://github.com/OriginCoderPulse/Music.git
-cd Music
+git clone https://github.com/OriginCoderPulse/Nusic.git
+cd Nusic
 cargo install --path .
 ```
 
@@ -201,6 +201,6 @@ src/
 
 **在终端里享受你的音乐** 🎶
 
-[反馈问题](https://github.com/OriginCoderPulse/Music/issues) · [English docs](./README.md)
+[反馈问题](https://github.com/OriginCoderPulse/Nusic/issues) · [English docs](./README.md)
 
 </div>

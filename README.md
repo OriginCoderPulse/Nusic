@@ -4,7 +4,7 @@
 
 **A fast, beautiful terminal music player for your local library**
 
-[![Version](https://img.shields.io/badge/version-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Music/releases/tag/v0.1.3)
+[![Version](https://img.shields.io/badge/version-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.1.3)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-installation)
@@ -66,8 +66,8 @@ brew install nusic
 Requires **Rust 1.75+**.
 
 ```bash
-git clone https://github.com/OriginCoderPulse/Music.git
-cd Music
+git clone https://github.com/OriginCoderPulse/Nusic.git
+cd Nusic
 cargo install --path .
 ```
 
@@ -201,6 +201,6 @@ src/
 
 **Enjoy your music in the terminal** 🎶
 
-[Report an issue](https://github.com/OriginCoderPulse/Music/issues) · [简体中文文档](./README.zh-CN.md)
+[Report an issue](https://github.com/OriginCoderPulse/Nusic/issues) · [简体中文文档](./README.zh-CN.md)
 
 </div>
