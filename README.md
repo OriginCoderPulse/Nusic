@@ -31,22 +31,9 @@
 
 ## 📸 Interface
 
-```
-┌─ Library ────────────────────────────────────────┐  ┌─ Track Info ─────┐
-│  #  Title              Artist           Album  ⏱  │  │  Title           │
-│  1  光的方向 (Live)     张碧晨            --     4:32│  │  Artist          │
-│  2  ...                                            │  │  Album           │
-└────────────────────────────────────────────────────┘  └──────────────────┘
-┌─ Lyrics ─────────────────────────────────────────────────────────────────┐
-│  ♪ synced line follows playback …                                        │
-└──────────────────────────────────────────────────────────────────────────┘
-┌─ Player ─────────────────────────────────────────────────────────────────┐
-│                         光的方向 (Live)                                   │
-│              ▁▃▅▇█▇▅▃▁  ▃▅▇█▇▅  ▁▃▅▇▅▃▁  (live spectrum)                  │
-│              ◀◀   ▶/⏸   ▶▶          🔀 Shuffle   🔁 Repeat              │
-│                    ━━━━━━━●━━━━━━━━━━  1:24 / 4:32                       │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/screenshot.png" alt="Nusic terminal UI — library, track info, lyrics, and player with spectrum visualizer" width="720">
+</p>
 
 Press **`K`** anytime for the in-app shortcut cheat sheet.
 
