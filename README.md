@@ -4,7 +4,7 @@
 
 **A fast, beautiful terminal music player for your local library**
 
-[![Version](https://img.shields.io/badge/version-0.1.2-blue?style=flat-square)](https://github.com/OriginCoderPulse/Music/releases/tag/v0.1.2)
+[![Version](https://img.shields.io/badge/version-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Music/releases/tag/v0.1.3)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-installation)

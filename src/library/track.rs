@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, StandardTagKey, Tag, Value};
 use symphonia::core::probe::Hint;
 
 use crate::error::{NusicError, Result};
+
+pub const MISSING: &str = "--";
 
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "ogg", "opus", "m4a", "m4p", "aac", "wav", "aiff", "aif",
@@ -53,7 +55,7 @@ impl Track {
     pub fn duration_display(&self) -> String {
         self.duration_secs
             .map(format_duration)
-            .unwrap_or_else(|| "--:--".to_string())
+            .unwrap_or_else(|| MISSING.to_string())
     }
 }
 
@@ -73,12 +75,12 @@ fn read_metadata(path: &Path) -> (String, String, String, Option<u32>, Option<f6
     let filename = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("Unknown")
+        .unwrap_or(MISSING)
         .to_string();
 
     let mut title = filename.clone();
-    let mut artist = "Unknown Artist".to_string();
-    let mut album = "Unknown Album".to_string();
+    let mut artist = MISSING.to_string();
+    let mut album = MISSING.to_string();
     let mut track_number = None;
     let mut duration_secs = None;
 
@@ -110,26 +112,114 @@ fn read_metadata(path: &Path) -> (String, String, String, Option<u32>, Option<f6
             }
         }
 
-        if let Some(rev) = probed.format.metadata().current() {
+        let mut metadata = probed.format.metadata();
+        let _ = metadata.skip_to_latest();
+        if let Some(rev) = metadata.current() {
             for tag in rev.tags() {
-                match tag.std_key {
-                    Some(symphonia::core::meta::StandardTagKey::TrackTitle) => {
-                        title = tag.value.to_string();
-                    }
-                    Some(symphonia::core::meta::StandardTagKey::Artist) => {
-                        artist = tag.value.to_string();
-                    }
-                    Some(symphonia::core::meta::StandardTagKey::Album) => {
-                        album = tag.value.to_string();
-                    }
-                    Some(symphonia::core::meta::StandardTagKey::TrackNumber) => {
-                        track_number = tag.value.to_string().parse().ok();
-                    }
-                    _ => {}
-                }
+                apply_tag(tag, &mut title, &mut artist, &mut album, &mut track_number);
+            }
+        }
+    }
+
+    if artist == MISSING {
+        if let Some((parsed_artist, parsed_title)) = parse_filename_artist_title(&filename) {
+            artist = parsed_artist;
+            if title == filename {
+                title = parsed_title;
             }
         }
     }
 
     (title, artist, album, track_number, duration_secs)
+}
+
+fn apply_tag(
+    tag: &Tag,
+    title: &mut String,
+    artist: &mut String,
+    album: &mut String,
+    track_number: &mut Option<u32>,
+) {
+    if let Some(std_key) = tag.std_key {
+        match std_key {
+            StandardTagKey::TrackTitle => set_if_present(title, tag),
+            StandardTagKey::Artist | StandardTagKey::AlbumArtist | StandardTagKey::Composer => {
+                set_if_present(artist, tag);
+            }
+            StandardTagKey::Album => set_if_present(album, tag),
+            StandardTagKey::TrackNumber | StandardTagKey::TrackTotal => {
+                *track_number = parse_track_number(&tag_value_string(tag));
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    let key = tag.key.to_ascii_lowercase();
+    match key.as_str() {
+        "title" | "tracktitle" | "name" | "©nam" | "tit2" => set_if_present(title, tag),
+        "artist" | "albumartist" | "album artist" | "performer" | "©art" | "tpe1" | "tpe2" => {
+            set_if_present(artist, tag);
+        }
+        "album" | "albumtitle" | "©alb" | "talb" => set_if_present(album, tag),
+        "tracknumber" | "track" | "trck" => {
+            *track_number = parse_track_number(&tag_value_string(tag));
+        }
+        _ => {}
+    }
+}
+
+fn set_if_present(field: &mut String, tag: &Tag) {
+    let value = tag_value_string(tag);
+    if !value.trim().is_empty() {
+        *field = value;
+    }
+}
+
+fn tag_value_string(tag: &Tag) -> String {
+    match &tag.value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn parse_track_number(raw: &str) -> Option<u32> {
+    raw.split('/')
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Parse common download filenames like `Artist - Title` or `A,B,C - Title`.
+fn parse_filename_artist_title(stem: &str) -> Option<(String, String)> {
+    for sep in [" - ", " – ", " — "] {
+        if let Some((left, right)) = stem.split_once(sep) {
+            let parsed_artist = left.trim();
+            let parsed_title = right.trim();
+            if !parsed_artist.is_empty() && !parsed_title.is_empty() {
+                return Some((parsed_artist.to_string(), parsed_title.to_string()));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_netease_style_filename() {
+        let (artist, title) =
+            parse_filename_artist_title("张碧晨 - 光的方向 (Live)").unwrap();
+        assert_eq!(artist, "张碧晨");
+        assert_eq!(title, "光的方向 (Live)");
+
+        let (artist, title) =
+            parse_filename_artist_title("Ciyo,见过夏天P,乌托邦P - 拼接乌托邦").unwrap();
+        assert_eq!(artist, "Ciyo,见过夏天P,乌托邦P");
+        assert_eq!(title, "拼接乌托邦");
+    }
 }

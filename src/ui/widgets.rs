@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::library::{active_index, segment_fraction};
+use crate::library::{active_index, segment_fraction, MISSING};
 use crate::player::{PlaybackState, RepeatMode};
 use crate::ui::Theme;
 
@@ -96,9 +96,9 @@ pub fn song_info(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         } else {
             (
                 "No tracks".into(),
-                "—".into(),
+                MISSING.into(),
                 truncate_chars(&app.load_path.display().to_string(), MAX_FIELD_CHARS),
-                "—".into(),
+                MISSING.into(),
             )
         };
 
