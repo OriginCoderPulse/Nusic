@@ -47,6 +47,7 @@ pub struct Theme {
     pub progress_empty: Style,
     pub error: Style,
     pub subtitle: Style,
+    pub popup: Style,
 }
 
 impl Default for Theme {
@@ -65,6 +66,7 @@ impl Default for Theme {
             progress_fill: Style::default().fg(MAUVE),
             progress_empty: Style::default().fg(SURFACE1),
             error: Style::default().fg(RED),
+            popup: Style::default().bg(BASE).fg(TEXT),
         }
     }
 }

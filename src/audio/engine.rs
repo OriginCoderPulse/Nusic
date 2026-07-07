@@ -13,7 +13,6 @@ use super::decoder::open_decoder;
 struct Engine {
     stream_handle: OutputStreamHandle,
     sink: Option<Sink>,
-    volume: f32,
     state: PlaybackState,
     duration: Duration,
     play_started: Instant,
@@ -22,11 +21,10 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(stream_handle: OutputStreamHandle, volume: f32) -> Self {
+    fn new(stream_handle: OutputStreamHandle) -> Self {
         Self {
             stream_handle,
             sink: None,
-            volume,
             state: PlaybackState::Stopped,
             duration: Duration::ZERO,
             play_started: Instant::now(),
@@ -56,7 +54,6 @@ impl Engine {
         };
 
         self.duration = source.total_duration().unwrap_or(Duration::ZERO);
-        let source = source;
 
         let sink = match Sink::try_new(&self.stream_handle) {
             Ok(s) => s,
@@ -66,7 +63,7 @@ impl Engine {
             }
         };
 
-        sink.set_volume(self.volume);
+        sink.set_volume(1.0);
         sink.append(source);
         self.sink = Some(sink);
         self.current_path = Some(path);
@@ -130,13 +127,6 @@ impl Engine {
         let _ = evt_tx.send(PlayerEvent::StateChanged(self.state));
     }
 
-    fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
-        if let Some(sink) = &self.sink {
-            sink.set_volume(self.volume);
-        }
-    }
-
     fn tick(&mut self, evt_tx: &Sender<PlayerEvent>) {
         if self.state == PlaybackState::Playing {
             if let Some(sink) = &self.sink {
@@ -152,7 +142,7 @@ impl Engine {
     }
 }
 
-pub fn spawn_engine(volume: f32) -> anyhow::Result<(Sender<PlayerCommand>, Receiver<PlayerEvent>)> {
+pub fn spawn_engine() -> anyhow::Result<(Sender<PlayerCommand>, Receiver<PlayerEvent>)> {
     let (cmd_tx, cmd_rx) = unbounded();
     let (evt_tx, evt_rx) = unbounded();
 
@@ -166,7 +156,7 @@ pub fn spawn_engine(volume: f32) -> anyhow::Result<(Sender<PlayerCommand>, Recei
         };
 
         let (_stream, stream_handle) = stream;
-        let mut engine = Engine::new(stream_handle, volume);
+        let mut engine = Engine::new(stream_handle);
         let evt = Arc::new(evt_tx);
 
         loop {
@@ -175,7 +165,6 @@ pub fn spawn_engine(volume: f32) -> anyhow::Result<(Sender<PlayerCommand>, Recei
                     PlayerCommand::Load(path) => engine.load(path, &evt),
                     PlayerCommand::Toggle => engine.toggle(&evt),
                     PlayerCommand::Stop => engine.stop(&evt),
-                    PlayerCommand::SetVolume(v) => engine.set_volume(v),
                     PlayerCommand::Shutdown => return,
                 }
             }

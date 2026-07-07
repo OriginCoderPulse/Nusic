@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use unicode_width::UnicodeWidthStr;
@@ -10,16 +12,16 @@ use ratatui::Frame;
 
 use crate::app::App;
 use crate::library::{active_index, segment_fraction};
-use crate::player::PlaybackState;
+use crate::player::{PlaybackState, RepeatMode};
 use crate::ui::Theme;
 
 const SPECTRUM_LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// ~4.8s low → high → low, then static gray bars.
-const SPECTRUM_IDLE_ANIM_SECS: f32 = 4.8;
 const SPECTRUM_IDLE_STATIC: f32 = 1.0;
 const SPECTRUM_MAX_LEVEL: usize = 7;
 /// Exponential smoothing — higher = snappier, lower = silkier.
-const SPECTRUM_SMOOTH_RATE: f32 = 16.0;
+const SPECTRUM_SMOOTH_RATE: f32 = 14.0;
+const SPECTRUM_ATTACK_RATE: f32 = 18.0;
+const SPECTRUM_RELEASE_RATE: f32 = 10.0;
 const MAX_FIELD_CHARS: usize = 15;
 const SELECT_MARKER: &str = "›";
 const PLAY_ICON: &str = "♫";
@@ -49,6 +51,27 @@ pub fn app_header(frame: &mut Frame, area: Rect, theme: &Theme) {
         .alignment(Alignment::Center),
         inner,
     );
+}
+
+fn player_panel_title(app: &App) -> Option<String> {
+    if !matches!(
+        app.playback.state,
+        PlaybackState::Playing | PlaybackState::Paused
+    ) {
+        return None;
+    }
+
+    app.playback
+        .current_path
+        .as_ref()
+        .and_then(|path| {
+            app.queue
+                .tracks()
+                .iter()
+                .find(|t| t.path.as_path() == path.as_path())
+                .map(|t| t.title.clone())
+        })
+        .or_else(|| app.queue.current_track().map(|t| t.title.clone()))
 }
 
 pub fn song_info(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -90,8 +113,7 @@ pub fn song_info(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 pub fn track_list(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
-    let count = app.filtered_indices.len();
-    let title = format!("Library ({count})");
+    let title = library_panel_title(app);
     let block = panel_block(&title, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -101,6 +123,7 @@ pub fn track_list(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     }
 
     let viewport = inner.height as usize;
+    app.list_viewport = viewport.max(1);
     app.ensure_list_visible(viewport);
 
     if app.filtered_indices.is_empty() {
@@ -198,6 +221,20 @@ fn track_row(
     ])
 }
 
+fn library_panel_title(app: &App) -> String {
+    let count = app.filtered_indices.len();
+    let mut title = format!("Library ({count})");
+    if app.queue.shuffle_enabled() && app.queue.repeat_mode() != RepeatMode::One {
+        title.push_str(" · Shuffle");
+    }
+    match app.queue.repeat_mode() {
+        RepeatMode::All => title.push_str(" · Repeat All"),
+        RepeatMode::One => title.push_str(" · Repeat One"),
+        RepeatMode::Off => {}
+    }
+    title
+}
+
 fn truncate_display(s: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -259,36 +296,135 @@ pub fn lyrics_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
 }
 
-pub fn spectrum_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, dt: Duration) {
-    render_spectrum(frame, area, app, theme, dt);
+pub fn player_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, dt: Duration) {
+    use crate::ui::layout::SPECTRUM_INNER_ROWS;
+
+    let title_w = area.width.saturating_sub(4) as usize;
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.border)
+        .padding(Padding::new(ROW_PAD, ROW_PAD, 0, 0));
+
+    if let Some(title) = player_panel_title(app) {
+        block = block
+            .title(Line::from(Span::styled(
+                truncate_display(&title, title_w),
+                theme.title,
+            )))
+            .title_alignment(Alignment::Center);
+    }
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(SPECTRUM_INNER_ROWS),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    render_spectrum_bars(frame, rows[1], app, theme, dt);
+
+    let play_icon = match app.playback.state {
+        PlaybackState::Playing => "⏸",
+        PlaybackState::Paused | PlaybackState::Stopped => "▶",
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("⏮", theme.muted),
+            Span::raw("  "),
+            Span::styled(play_icon, theme.accent),
+            Span::raw("  "),
+            Span::styled("⏭", theme.muted),
+        ]))
+        .alignment(Alignment::Center),
+        rows[3],
+    );
+
+    render_progress_line(
+        frame,
+        rows[5],
+        app.playback_position(),
+        app.playback.duration,
+        theme,
+    );
 }
 
 pub fn advance_spectrum(app: &mut App, dt: Duration) {
     let dt = dt.as_secs_f32().min(0.05);
-
-    if app.playback.state == PlaybackState::Playing {
-        app.spectrum_idle_secs = SPECTRUM_IDLE_ANIM_SECS + 1.0;
-    } else {
-        app.spectrum_idle_secs += dt;
-    }
-
     let bar_count = app.spectrum_bars.len();
     if bar_count == 0 {
         return;
     }
 
-    let t = app.spectrum_started.elapsed().as_secs_f32();
-    let alpha = 1.0 - (-dt * SPECTRUM_SMOOTH_RATE).exp();
+    if app.spectrum_targets.len() != bar_count {
+        app.spectrum_targets.resize(bar_count, 0.0);
+        reseed_spectrum_targets(app);
+    }
+
     let playing = app.playback.state == PlaybackState::Playing;
+    app.spectrum_reseed_acc += dt;
+    let interval = if playing {
+        0.14 + spectrum_hash(app.spectrum_seed, 0, 1) * 0.22
+    } else {
+        0.55 + spectrum_hash(app.spectrum_seed, 0, 2) * 0.85
+    };
+    if app.spectrum_reseed_acc >= interval {
+        app.spectrum_reseed_acc = 0.0;
+        reseed_spectrum_targets(app);
+    }
 
     for (i, bar) in app.spectrum_bars.iter_mut().enumerate() {
-        let target = if playing {
-            spectrum_play_target(i, t)
+        let target = app.spectrum_targets.get(i).copied().unwrap_or(0.0);
+        let rate = if playing && target > *bar {
+            SPECTRUM_ATTACK_RATE
+        } else if playing {
+            SPECTRUM_RELEASE_RATE
         } else {
-            spectrum_idle_target(i, app.spectrum_idle_secs)
+            SPECTRUM_SMOOTH_RATE * 0.6
         };
+        let alpha = 1.0 - (-dt * rate).exp();
         *bar += (target - *bar) * alpha;
     }
+}
+
+fn reseed_spectrum_targets(app: &mut App) {
+    app.spectrum_seed = app.spectrum_seed.wrapping_add(1);
+    let playing = app.playback.state == PlaybackState::Playing;
+    for (i, target) in app.spectrum_targets.iter_mut().enumerate() {
+        *target = spectrum_random_level(i, app.spectrum_seed, playing);
+    }
+}
+
+fn spectrum_hash(seed: u64, bar: usize, salt: u32) -> f32 {
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    bar.hash(&mut hasher);
+    salt.hash(&mut hasher);
+    hasher.finish() as f32 / u64::MAX as f32
+}
+
+fn spectrum_random_level(bar: usize, seed: u64, playing: bool) -> f32 {
+    let raw = spectrum_hash(seed, bar, 0);
+    let contrast = if raw < 0.38 {
+        raw * 0.22
+    } else {
+        0.08 + (raw - 0.38) * 1.45
+    };
+    let scale = if playing { 1.0 } else { 0.35 };
+    contrast.clamp(0.0, 1.0) * SPECTRUM_MAX_LEVEL as f32 * scale
 }
 
 fn pad_center(text: &str, width: u16, style: Style) -> Line<'static> {
@@ -400,68 +536,83 @@ fn render_centered_message(frame: &mut Frame, area: Rect, text: &str, style: Sty
     );
 }
 
-fn render_spectrum(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, dt: Duration) {
-    let block = panel_block("Spectrum", theme);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.width == 0 || inner.height == 0 {
+fn render_spectrum_bars(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, dt: Duration) {
+    if area.width == 0 || area.height == 0 {
         return;
     }
 
-    let bar_count = (inner.width as usize).div_ceil(2).max(1);
+    let bar_count = (area.width as usize).div_ceil(2).max(1);
     app.spectrum_bars
         .resize(bar_count, SPECTRUM_IDLE_STATIC);
     advance_spectrum(app, dt);
 
     let playing = app.playback.state == PlaybackState::Playing;
-    let t = app.spectrum_started.elapsed().as_secs_f32();
+    let rows = area.height.max(1);
 
-    let mut spans = Vec::with_capacity(bar_count * 2);
-    for i in 0..bar_count {
-        let level = app.spectrum_bars[i].round().clamp(0.0, SPECTRUM_MAX_LEVEL as f32) as usize;
-        spans.push(Span::styled(
-            SPECTRUM_LEVELS[level].to_string(),
-            spectrum_bar_style(i, t, playing, theme),
-        ));
-        if i + 1 < bar_count {
-            spans.push(Span::raw(" "));
-        }
-    }
-
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
-        inner,
-    );
-}
-
-fn spectrum_play_target(i: usize, t: f32) -> f32 {
-    let fi = i as f32;
-    let n1 = (t * 2.47 + fi * 0.83).sin();
-    let n2 = (t * 3.91 + fi * 1.29).sin();
-    let n3 = (t * 5.17 + fi * 0.37).sin();
-    let gate = (t * 1.13 + fi * 2.03).sin() * 0.5 + 0.5;
-    let raw = if gate > 0.58 {
-        (n1 * 0.45 + n2 * 0.35 + n3 * 0.55 + 1.15) / 2.4
-    } else if gate > 0.32 {
-        (n1 * 0.35 + n2 * 0.25 + 0.55) / 1.4
+    let (display_min, display_max) = if playing && !app.spectrum_bars.is_empty() {
+        let min = app
+            .spectrum_bars
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        let max = app
+            .spectrum_bars
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        (min, max.max(min + 1.2))
     } else {
-        (n1 * 0.15 + 0.35) / 1.2
+        (0.0, SPECTRUM_MAX_LEVEL as f32)
     };
-    raw.clamp(0.0, 1.0) * SPECTRUM_MAX_LEVEL as f32
-}
+    let display_range = (display_max - display_min).max(0.8);
 
-fn spectrum_idle_target(i: usize, idle_secs: f32) -> f32 {
-    if idle_secs >= SPECTRUM_IDLE_ANIM_SECS {
-        return SPECTRUM_IDLE_STATIC;
+    let row_areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Length(1); rows as usize])
+        .split(area);
+
+    for (row, row_area) in row_areas.iter().enumerate() {
+        let row_from_bottom = rows as usize - 1 - row;
+        let row_bottom = row_from_bottom as f32 / rows as f32;
+        let row_top = (row_from_bottom + 1) as f32 / rows as f32;
+        let mut spans = Vec::with_capacity(bar_count * 2);
+        for i in 0..bar_count {
+            let level = app.spectrum_bars[i].clamp(0.0, SPECTRUM_MAX_LEVEL as f32);
+            let normalized = if playing {
+                ((level - display_min) / display_range).clamp(0.0, 1.0).powf(0.9)
+            } else {
+                level / SPECTRUM_MAX_LEVEL as f32
+            };
+            let ch = if normalized >= row_top {
+                SPECTRUM_LEVELS[SPECTRUM_MAX_LEVEL]
+            } else if normalized > row_bottom {
+                let frac = (normalized - row_bottom) / (row_top - row_bottom);
+                let idx = (frac * SPECTRUM_MAX_LEVEL as f32)
+                    .round()
+                    .clamp(1.0, SPECTRUM_MAX_LEVEL as f32) as usize;
+                SPECTRUM_LEVELS[idx]
+            } else if row_from_bottom == 0 && normalized > 0.0 {
+                SPECTRUM_LEVELS[0]
+            } else {
+                ' '
+            };
+            spans.push(Span::styled(
+                ch.to_string(),
+                spectrum_bar_style(i, normalized, playing, theme),
+            ));
+            if i + 1 < bar_count {
+                spans.push(Span::raw(" "));
+            }
+        }
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+            *row_area,
+        );
     }
-    let phase = idle_secs / SPECTRUM_IDLE_ANIM_SECS * std::f32::consts::PI;
-    let envelope = phase.sin();
-    let ripple = (i as f32 * 0.55 + idle_secs * 2.5).sin() * 0.12;
-    (envelope + ripple).clamp(0.0, 1.0) * SPECTRUM_MAX_LEVEL as f32
 }
 
-fn spectrum_bar_style(i: usize, t: f32, playing: bool, theme: &Theme) -> Style {
+fn spectrum_bar_style(i: usize, normalized: f32, playing: bool, theme: &Theme) -> Style {
     if !playing {
         return theme.muted;
     }
@@ -475,88 +626,9 @@ fn spectrum_bar_style(i: usize, t: f32, playing: bool, theme: &Theme) -> Style {
         theme.progress_fill,
         theme.title,
     ];
-    let fi = i as f32;
-    let v = (t * 1.7 + fi * 0.93).sin() * 0.45 + (t * 0.9 + fi * 1.41).cos() * 0.55;
-    let idx = ((v + 1.0) * 0.5 * palette.len() as f32) as usize;
+    let jitter = spectrum_hash(i as u64, (normalized * 1000.0) as usize, 3);
+    let idx = ((normalized * 0.65 + jitter * 0.35) * palette.len() as f32) as usize;
     palette[idx.min(palette.len() - 1)]
-}
-
-pub fn player_controls(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let block = panel_block("Player", theme);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 {
-        return;
-    }
-
-    let title = app
-        .playback
-        .current_path
-        .as_ref()
-        .and_then(|path| {
-            app.queue
-                .tracks()
-                .iter()
-                .find(|t| t.path.as_path() == path.as_path())
-                .map(|t| t.title.clone())
-        })
-        .or_else(|| app.queue.current_track().map(|t| t.title.clone()))
-        .unwrap_or_else(|| "No track playing".to_string());
-
-    let play_icon = match app.playback.state {
-        PlaybackState::Playing => "⏸",
-        PlaybackState::Paused | PlaybackState::Stopped => "▶",
-    };
-
-    let rows = if inner.height >= 3 {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(inner)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(inner)
-    };
-
-    let (title_area, progress_area, controls_area) = if inner.height >= 3 {
-        (Some(rows[0]), rows[1], rows[2])
-    } else {
-        (None, rows[0], rows[1])
-    };
-
-    if let Some(title_area) = title_area {
-        frame.render_widget(
-            Paragraph::new(truncate_display(&title, title_area.width as usize))
-                .style(theme.title)
-                .alignment(Alignment::Center),
-            title_area,
-        );
-    }
-
-    render_progress_line(
-        frame,
-        progress_area,
-        app.playback_position(),
-        app.playback.duration,
-        theme,
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ⏮ ", theme.muted),
-            Span::styled(play_icon, theme.accent),
-            Span::styled(" ⏭ ", theme.muted),
-        ]))
-        .alignment(Alignment::Center),
-        controls_area,
-    );
 }
 
 fn render_progress_line(
@@ -566,7 +638,8 @@ fn render_progress_line(
     duration: std::time::Duration,
     theme: &Theme,
 ) {
-    let bar_w = area.width.max(1) as usize;
+    let max_w = area.width.max(1) as usize;
+    let bar_w = (max_w * 65 / 100).clamp(28, 48).min(max_w);
     let ratio = if duration.is_zero() {
         0.0
     } else {

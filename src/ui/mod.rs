@@ -6,6 +6,10 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -16,12 +20,19 @@ use crate::app::App;
 use layout::{split_left, split_main, split_top};
 use theme::Theme;
 use widgets::{
-    app_header, lyrics_panel, player_controls, song_info, spectrum_bar, status_message, track_list,
+    app_header, lyrics_panel, player_panel, song_info, status_message, track_list,
 };
 
 pub fn run(mut app: App) -> anyhow::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
-    crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+    crossterm::execute!(
+        io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        EnableBracketedPaste,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        ),
+    )?;
     let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(
         io::stdout(),
     ))?;
@@ -58,7 +69,12 @@ pub fn run(mut app: App) -> anyhow::Result<()> {
     }
 
     crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+    crossterm::execute!(
+        io::stdout(),
+        PopKeyboardEnhancementFlags,
+        DisableBracketedPaste,
+        crossterm::terminal::LeaveAlternateScreen,
+    )?;
 
     app.shutdown();
 
@@ -71,7 +87,7 @@ fn draw(frame: &mut Frame, app: &mut App, dt: Duration) {
 
     frame.render_widget(Clear, area);
 
-    let (top, spectrum, controls) = split_main(area);
+    let (top, bottom) = split_main(area);
     let (left, right) = split_top(top);
     let (header, info, list) = split_left(left);
 
@@ -79,8 +95,7 @@ fn draw(frame: &mut Frame, app: &mut App, dt: Duration) {
     song_info(frame, info, app, &theme);
     track_list(frame, list, app, &theme);
     lyrics_panel(frame, right, app, &theme);
-    spectrum_bar(frame, spectrum, app, &theme, dt);
-    player_controls(frame, controls, app, &theme);
+    player_panel(frame, bottom, app, &theme, dt);
 
     if let Some(msg) = app.status_message.clone() {
         status_message(frame, area, &msg, &theme);
@@ -102,17 +117,17 @@ fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("n / ]", "Next track"),
         ("p / [", "Previous track"),
         ("j / ↓", "Move selection down"),
-        ("↑", "Move selection up"),
-        ("← / →", "Move selection"),
+        ("k / ↑", "Move selection up"),
+        ("Ctrl+u / Ctrl+d", "Scroll list up / down"),
         ("PgUp / PgDn", "Move 10 items"),
         ("Home / End", "First / last track"),
-        ("h / l", "Volume down / up"),
+        ("h / l / ← / → / , / .", "Volume down / up"),
         ("+ / -", "Volume up / down"),
         ("s", "Toggle shuffle"),
         ("r", "Cycle repeat mode"),
         ("/", "Search library"),
         ("o", "Open music folder"),
-        ("k", "Show / hide this help"),
+        ("K", "Show / hide this help"),
         ("q / Esc", "Quit"),
         ("Ctrl+s", "Quit"),
     ];
@@ -130,24 +145,31 @@ fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
 
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = centered_rect(58, height, area);
+    frame.render_widget(Clear, popup);
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(theme.accent)
+            .style(theme.popup)
             .title(Line::from(Span::styled(" Shortcuts ", theme.subtitle))),
         popup,
     );
-    frame.render_widget(Paragraph::new(lines), popup.inner(Margin::new(1, 1)));
+    frame.render_widget(
+        Paragraph::new(lines).style(theme.popup),
+        popup.inner(Margin::new(1, 1)),
+    );
 }
 
 fn draw_search(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let popup = centered_rect(60, 3, area);
+    frame.render_widget(Clear, popup);
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(theme.accent)
+            .style(theme.popup)
             .title(Line::from(Span::styled(" Search ", theme.subtitle))),
         popup,
     );
@@ -157,7 +179,8 @@ fn draw_search(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Span::styled("/", theme.muted),
             Span::raw(&app.search_query),
             Span::styled("▌", theme.accent),
-        ])),
+        ]))
+        .style(theme.popup),
         inner,
     );
 }
@@ -207,19 +230,25 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('s') => app.toggle_shuffle(),
         KeyCode::Char('r') => app.cycle_repeat(),
         KeyCode::Char('o') => app.open_music_dir(),
-        KeyCode::Char('k') => app.help_mode = !app.help_mode,
+        KeyCode::Char('K') => app.help_mode = !app.help_mode,
         KeyCode::Char('/') => {
             app.search_mode = true;
             app.search_query.clear();
         }
         KeyCode::Char('+') | KeyCode::Char('=') => app.adjust_volume(0.05),
         KeyCode::Char('-') | KeyCode::Char('_') => app.adjust_volume(-0.05),
-        KeyCode::Char('h') => app.adjust_volume(-0.05),
-        KeyCode::Char('l') => app.adjust_volume(0.05),
+        KeyCode::Char('h') | KeyCode::Left => app.adjust_volume(-0.05),
+        KeyCode::Char('l') | KeyCode::Right => app.adjust_volume(0.05),
+        KeyCode::Char(',') => app.adjust_volume(-0.05),
+        KeyCode::Char('.') => app.adjust_volume(0.05),
         KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-        KeyCode::Up => app.move_selection(-1),
-        KeyCode::Left => app.move_selection(-1),
-        KeyCode::Right => app.move_selection(1),
+        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection_half_page(-1);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection_half_page(1);
+        }
         KeyCode::PageUp => app.move_selection(-10),
         KeyCode::PageDown => app.move_selection(10),
         KeyCode::Home => app.select_first(),
@@ -233,7 +262,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 
 fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
-        KeyCode::Esc | KeyCode::Char('k') => app.help_mode = false,
+        KeyCode::Esc | KeyCode::Char('K') => app.help_mode = false,
         _ => {}
     }
     false

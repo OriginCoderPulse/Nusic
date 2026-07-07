@@ -1,19 +1,16 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::library::{scan_path, spawn_watcher};
 use crate::player::{PlaybackState, PlayerCommand, PlayerEvent, PlayerQueue, RepeatMode};
 
-const DEFAULT_VOLUME: f32 = 0.8;
-
 #[derive(Debug, Clone)]
 pub struct PlaybackInfo {
     pub state: PlaybackState,
     pub position: Duration,
     pub duration: Duration,
-    pub volume: f32,
     pub current_path: Option<PathBuf>,
     /// Wall-clock anchor for interpolating position between engine updates.
     position_anchor: Instant,
@@ -25,7 +22,6 @@ impl Default for PlaybackInfo {
             state: PlaybackState::default(),
             position: Duration::ZERO,
             duration: Duration::ZERO,
-            volume: 1.0,
             current_path: None,
             position_anchor: Instant::now(),
         }
@@ -46,11 +42,13 @@ pub struct App {
     pub tick: u64,
     /// Smoothed bar heights (0..max level), updated every render frame.
     pub spectrum_bars: Vec<f32>,
-    pub spectrum_started: Instant,
-    /// Seconds since playback stopped; drives idle spectrum animation.
-    pub spectrum_idle_secs: f32,
+    /// Random target heights; reseeded at irregular intervals while playing.
+    pub spectrum_targets: Vec<f32>,
+    pub spectrum_seed: u64,
+    pub spectrum_reseed_acc: f32,
     pub lyrics: Option<Vec<crate::library::LrcLine>>,
     pub list_scroll: usize,
+    pub list_viewport: usize,
     resync_rx: Receiver<()>,
     cmd_tx: Sender<PlayerCommand>,
     evt_rx: Receiver<PlayerEvent>,
@@ -67,13 +65,14 @@ impl App {
         let filtered_indices: Vec<usize> = (0..queue.len()).collect();
 
         let resync_rx = spawn_watcher(path.clone());
+        let spectrum_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
 
         let mut app = Self {
             queue,
-            playback: PlaybackInfo {
-                volume: DEFAULT_VOLUME,
-                ..Default::default()
-            },
+            playback: PlaybackInfo::default(),
             list_selection: 0,
             filtered_indices,
             search_mode: false,
@@ -84,10 +83,12 @@ impl App {
             should_quit: false,
             tick: 0,
             spectrum_bars: Vec::new(),
-            spectrum_started: Instant::now(),
-            spectrum_idle_secs: 1000.0,
+            spectrum_targets: Vec::new(),
+            spectrum_seed,
+            spectrum_reseed_acc: 0.0,
             lyrics: None,
             list_scroll: 0,
+            list_viewport: 1,
             resync_rx,
             cmd_tx,
             evt_rx,
@@ -140,9 +141,6 @@ impl App {
                     self.playback.state = state;
                     if state == PlaybackState::Playing {
                         self.playback.position_anchor = Instant::now();
-                    }
-                    if was_playing && state != PlaybackState::Playing {
-                        self.spectrum_idle_secs = 0.0;
                     }
                     if state == PlaybackState::Stopped {
                         self.playback.position = Duration::ZERO;
@@ -249,6 +247,11 @@ impl App {
         self.list_selection = next.clamp(0, len as i32 - 1) as usize;
     }
 
+    pub fn move_selection_half_page(&mut self, direction: i32) {
+        let step = (self.list_viewport / 2).max(1) as i32;
+        self.move_selection(direction * step);
+    }
+
     pub fn ensure_list_visible(&mut self, viewport: usize) {
         if viewport == 0 {
             return;
@@ -273,6 +276,9 @@ impl App {
 
     pub fn toggle_shuffle(&mut self) {
         let enabled = !self.queue.shuffle_enabled();
+        if enabled && self.queue.repeat_mode() == RepeatMode::One {
+            self.queue.set_repeat_mode(RepeatMode::Off);
+        }
         self.queue.set_shuffle(enabled);
     }
 
@@ -281,10 +287,9 @@ impl App {
     }
 
     pub fn adjust_volume(&mut self, delta: f32) {
-        self.playback.volume = (self.playback.volume + delta).clamp(0.0, 1.0);
-        let _ = self
-            .cmd_tx
-            .send(PlayerCommand::SetVolume(self.playback.volume));
+        if let Err(e) = crate::system_volume::adjust(delta) {
+            self.status_message = Some(e);
+        }
     }
 
     pub fn open_music_dir(&mut self) {
@@ -395,6 +400,7 @@ impl App {
         self.playback.position = Duration::ZERO;
         self.playback.duration = Duration::ZERO;
         self.lyrics = None;
-        self.spectrum_idle_secs = 0.0;
+        self.spectrum_seed = self.spectrum_seed.wrapping_add(1);
+        self.spectrum_reseed_acc = 0.0;
     }
 }

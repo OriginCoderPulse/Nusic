@@ -13,6 +13,7 @@ pub enum RepeatMode {
 
 pub struct PlayerQueue {
     tracks: Vec<Track>,
+    /// Single playback order — shuffled only when shuffle is enabled.
     order: Vec<usize>,
     current: Option<usize>,
     shuffle: bool,
@@ -29,7 +30,7 @@ impl PlayerQueue {
             shuffle,
             repeat,
         };
-        if shuffle {
+        if queue.shuffle {
             queue.shuffle_order();
         }
         queue
@@ -68,11 +69,7 @@ impl PlayerQueue {
             return;
         }
         self.shuffle = shuffle;
-        if shuffle {
-            self.shuffle_order();
-        } else {
-            self.order = (0..self.tracks.len()).collect();
-        }
+        self.sync_order();
     }
 
     pub fn shuffle_enabled(&self) -> bool {
@@ -83,22 +80,27 @@ impl PlayerQueue {
         self.repeat
     }
 
+    pub fn set_repeat_mode(&mut self, mode: RepeatMode) {
+        self.repeat = mode;
+        if mode == RepeatMode::One {
+            self.set_shuffle(false);
+        }
+    }
+
     pub fn cycle_repeat(&mut self) -> RepeatMode {
         self.repeat = match self.repeat {
             RepeatMode::Off => RepeatMode::All,
             RepeatMode::All => RepeatMode::One,
             RepeatMode::One => RepeatMode::Off,
         };
+        if self.repeat == RepeatMode::One {
+            self.set_shuffle(false);
+        }
         self.repeat
     }
 
     pub fn resync(&mut self, tracks: Vec<Track>) {
         let current_path = self.current_track().map(|t| t.path.clone());
-        let old_order_paths: Vec<_> = self
-            .order
-            .iter()
-            .filter_map(|&i| self.tracks.get(i).map(|t| t.path.clone()))
-            .collect();
 
         self.tracks = tracks;
 
@@ -107,20 +109,7 @@ impl PlayerQueue {
         });
 
         if self.shuffle {
-            let mut order = Vec::new();
-            for path in old_order_paths {
-                if let Some(i) = self.tracks.iter().position(|t| t.path == path) {
-                    if !order.contains(&i) {
-                        order.push(i);
-                    }
-                }
-            }
-            for i in 0..self.tracks.len() {
-                if !order.contains(&i) {
-                    order.push(i);
-                }
-            }
-            self.order = order;
+            self.shuffle_from_current();
         } else {
             self.order = (0..self.tracks.len()).collect();
         }
@@ -133,6 +122,9 @@ impl PlayerQueue {
     pub fn select(&mut self, index: usize) -> Option<&Track> {
         if index < self.tracks.len() {
             self.current = Some(index);
+            if self.shuffle {
+                self.shuffle_from_current();
+            }
             self.tracks.get(index)
         } else {
             None
@@ -153,6 +145,10 @@ impl PlayerQueue {
             return None;
         }
 
+        if !self.shuffle {
+            return self.next_sequential();
+        }
+
         let pos = match self.current_queue_pos() {
             Some(p) => p,
             None => return self.first(),
@@ -165,7 +161,10 @@ impl PlayerQueue {
         }
 
         if self.repeat == RepeatMode::All {
-            return self.first();
+            self.begin_new_cycle();
+            let idx = self.order[0];
+            self.current = Some(idx);
+            return self.tracks.get(idx);
         }
 
         None
@@ -174,6 +173,10 @@ impl PlayerQueue {
     pub fn prev(&mut self) -> Option<&Track> {
         if self.order.is_empty() {
             return None;
+        }
+
+        if !self.shuffle {
+            return self.prev_sequential();
         }
 
         let pos = match self.current_queue_pos() {
@@ -196,21 +199,91 @@ impl PlayerQueue {
         self.current_track()
     }
 
+    fn next_sequential(&mut self) -> Option<&Track> {
+        let cur = self.current?;
+
+        if cur + 1 < self.tracks.len() {
+            self.current = Some(cur + 1);
+            return self.tracks.get(cur + 1);
+        }
+
+        if self.repeat == RepeatMode::All {
+            self.current = Some(0);
+            return self.tracks.get(0);
+        }
+
+        None
+    }
+
+    fn prev_sequential(&mut self) -> Option<&Track> {
+        let cur = self.current?;
+
+        if cur > 0 {
+            self.current = Some(cur - 1);
+            return self.tracks.get(cur - 1);
+        }
+
+        if self.repeat == RepeatMode::All {
+            let last = self.tracks.len() - 1;
+            self.current = Some(last);
+            return self.tracks.get(last);
+        }
+
+        self.current_track()
+    }
+
+    fn sync_order(&mut self) {
+        if self.shuffle {
+            self.shuffle_from_current();
+        } else {
+            self.order = (0..self.tracks.len()).collect();
+        }
+    }
+
+    /// Shuffle with the current track first, then the rest — so next always
+    /// walks through unplayed songs before stopping (when repeat is off).
+    fn shuffle_from_current(&mut self) {
+        let n = self.tracks.len();
+        if n == 0 {
+            self.order.clear();
+            return;
+        }
+        if let Some(cur) = self.current {
+            let mut rest: Vec<usize> = (0..n).filter(|&i| i != cur).collect();
+            Self::shuffle_slice(&mut rest);
+            self.order = std::iter::once(cur).chain(rest).collect();
+        } else {
+            self.shuffle_order();
+        }
+    }
+
+    fn begin_new_cycle(&mut self) {
+        let current = self.current;
+        self.shuffle_order();
+        if let Some(cur) = current {
+            if self.order.len() > 1 && self.order[0] == cur {
+                self.order.swap(0, 1);
+            }
+        }
+    }
+
     fn shuffle_order(&mut self) {
+        self.order = (0..self.tracks.len()).collect();
+        Self::shuffle_slice(&mut self.order);
+    }
+
+    fn shuffle_slice(items: &mut [usize]) {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-
-        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
-        let n = order.len();
+        let n = items.len();
         for i in (1..n).rev() {
             let mut hasher = DefaultHasher::new();
             seed.hash(&mut hasher);
             i.hash(&mut hasher);
             let j = (hasher.finish() as usize) % (i + 1);
-            order.swap(i, j);
+            items.swap(i, j);
         }
-        self.order = order;
     }
 }

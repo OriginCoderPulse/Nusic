@@ -18,7 +18,6 @@ pub enum PlayerCommand {
     Load(PathBuf),
     Toggle,
     Stop,
-    SetVolume(f32),
     Shutdown,
 }
 
