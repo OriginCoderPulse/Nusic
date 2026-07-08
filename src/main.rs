@@ -17,8 +17,33 @@ use audio::spawn_engine;
 use ipc::IpcClient;
 use paths::ensure_music_dir;
 
+fn print_help() {
+    let version = env!("CARGO_PKG_VERSION");
+    println!(
+        "\
+nusic {version} — terminal music player for local files
+
+Usage:
+  nusic              Launch the UI (attach to background player if running)
+  nusic --exit       Stop the background player
+  nusic --version    Print version
+  nusic --help       Print this help
+
+Options:
+  -h, --help         Show command help
+  -V, --version      Show version
+
+In-app help: press K inside nusic."
+    );
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return Ok(());
+    }
+
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("nusic {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

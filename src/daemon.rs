@@ -12,7 +12,7 @@ pub fn run(session_path: PathBuf) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&session_path);
 
     let (cmd_tx, evt_rx) = spawn_engine()?;
-    let mut app = App::from_snapshot(snapshot, cmd_tx.clone(), evt_rx, true);
+    let mut app = App::from_snapshot(snapshot, cmd_tx, evt_rx, true);
     app.bootstrap_playback();
 
     let server = DaemonServer::bind()?;
@@ -30,7 +30,7 @@ pub fn run(session_path: PathBuf) -> anyhow::Result<()> {
             IpcRequest::Ping => IpcResponse::Pong,
             IpcRequest::GetState => IpcResponse::State(app.snapshot()),
             IpcRequest::Command { cmd } => {
-                let _ = cmd_tx.send(cmd.into_player());
+                app.apply_ipc_command(cmd);
                 IpcResponse::Ok
             }
             IpcRequest::SetUiState {
@@ -38,10 +38,12 @@ pub fn run(session_path: PathBuf) -> anyhow::Result<()> {
                 list_scroll,
                 search_query,
                 quit_marked,
+                queue,
             } => {
                 app.list_scroll = list_scroll;
                 app.search_query = search_query;
                 app.quit_marked = quit_marked;
+                app.queue.restore_snapshot(&queue);
                 app.apply_filter();
                 if let Some(path) = selected_track_path {
                     if let Some(pos) = app.filtered_indices.iter().position(|&i| {

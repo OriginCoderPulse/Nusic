@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -121,6 +122,11 @@ impl PlayerQueue {
 
     pub fn clear_current(&mut self) {
         self.current = None;
+    }
+
+    /// Point the queue at `path` without reshuffling (used when resuming IPC loads).
+    pub fn set_current_by_path(&mut self, path: &Path) {
+        self.current = self.tracks.iter().position(|t| t.path == path);
     }
 
     pub fn snapshot(&self) -> QueueSnapshot {
@@ -333,5 +339,132 @@ impl PlayerQueue {
             let j = (hasher.finish() as usize) % (i + 1);
             items.swap(i, j);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use crate::library::Track;
+
+    #[test]
+    fn snapshot_preserves_shuffle_and_repeat() {
+        let tracks = vec![
+            Track {
+                path: PathBuf::from("/a.mp3"),
+                title: "A".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+            Track {
+                path: PathBuf::from("/b.mp3"),
+                title: "B".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+        ];
+        let mut queue = PlayerQueue::new(tracks, true, RepeatMode::All);
+        queue.select(1);
+
+        let snap = queue.snapshot();
+        assert!(snap.shuffle);
+        assert_eq!(snap.repeat, RepeatMode::All);
+
+        let mut restored = PlayerQueue::new(
+            vec![
+                Track {
+                    path: PathBuf::from("/a.mp3"),
+                    title: "A".into(),
+                    artist: String::new(),
+                    album: String::new(),
+                    duration_secs: None,
+                    track_number: None,
+                },
+                Track {
+                    path: PathBuf::from("/b.mp3"),
+                    title: "B".into(),
+                    artist: String::new(),
+                    album: String::new(),
+                    duration_secs: None,
+                    track_number: None,
+                },
+            ],
+            false,
+            RepeatMode::Off,
+        );
+        restored.restore_snapshot(&snap);
+        assert!(restored.shuffle_enabled());
+        assert_eq!(restored.repeat_mode(), RepeatMode::All);
+        assert_eq!(
+            restored.current_track().map(|t| t.path.to_str().unwrap()),
+            Some("/b.mp3")
+        );
+    }
+
+    #[test]
+    fn next_honors_repeat_all_in_sequential_mode() {
+        let tracks = vec![
+            Track {
+                path: PathBuf::from("/a.mp3"),
+                title: "A".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+            Track {
+                path: PathBuf::from("/b.mp3"),
+                title: "B".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+        ];
+        let mut queue = PlayerQueue::new(tracks, false, RepeatMode::All);
+        queue.select(1);
+
+        assert_eq!(
+            queue.next().map(|t| t.path.to_str().unwrap()),
+            Some("/a.mp3")
+        );
+    }
+
+    #[test]
+    fn set_current_by_path_does_not_reshuffle() {
+        let tracks = vec![
+            Track {
+                path: PathBuf::from("/a.mp3"),
+                title: "A".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+            Track {
+                path: PathBuf::from("/b.mp3"),
+                title: "B".into(),
+                artist: String::new(),
+                album: String::new(),
+                duration_secs: None,
+                track_number: None,
+            },
+        ];
+        let mut queue = PlayerQueue::new(tracks, true, RepeatMode::Off);
+        queue.select(0);
+        let order_before = queue.snapshot().order_paths;
+
+        queue.set_current_by_path(Path::new("/b.mp3"));
+        assert_eq!(queue.snapshot().order_paths, order_before);
+        assert_eq!(
+            queue.current_track().map(|t| t.path.to_str().unwrap()),
+            Some("/b.mp3")
+        );
     }
 }

@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-07-08
+
+### Added
+
+- **`nusic --help` / `-h`** — print CLI usage from the shell.
+
+### Fixed
+
+- **Shuffle & repeat in background** — daemon keeps queue state in sync; background autoplay follows shuffle/repeat rules.
+- **Shuffle & repeat on re-attach** — UI changes sync to the daemon on toggle and detach.
+
 ## [0.2.0] - 2026-07-08
 
 ### Added
@@ -22,5 +33,6 @@ All notable changes to this project are documented in this file.
 
 - Improved metadata parsing and documentation.
 
+[0.2.1]: https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.1
 [0.2.0]: https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.0
 [0.1.3]: https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.1.3

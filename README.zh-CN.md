@@ -4,7 +4,7 @@
 
 **在终端里优雅地播放本地音乐**
 
-[![Version](https://img.shields.io/badge/版本-0.2.0-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.0)
+[![Version](https://img.shields.io/badge/版本-0.2.1-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.1)
 [![License](https://img.shields.io/badge/协议-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-安装)
@@ -129,6 +129,7 @@ cargo install --path .
 | `nusic` | 启动界面（有后台时自动 attach） |
 | `nusic --exit` | 停止后台播放 |
 | `nusic --version` | 显示版本 |
+| `nusic --help` | 显示命令行帮助 |
 
 ---
 

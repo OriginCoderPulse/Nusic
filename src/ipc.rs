@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths::{daemon_pid_path, ensure_runtime_dir};
 use crate::player::{PlaybackState, PlayerCommand, PlayerEvent};
-use crate::session::SessionSnapshot;
+use crate::session::{QueueSnapshot, SessionSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -23,6 +23,7 @@ pub enum IpcRequest {
         list_scroll: usize,
         search_query: String,
         quit_marked: bool,
+        queue: QueueSnapshot,
     },
     Shutdown,
 }
@@ -61,20 +62,6 @@ pub enum IpcEvent {
     Position { position_ms: u64 },
     TrackEnded,
     Error { message: String },
-}
-
-impl IpcCommand {
-    pub fn into_player(self) -> PlayerCommand {
-        match self {
-            Self::Load { path } => PlayerCommand::Load(path),
-            Self::LoadAt { path, position_ms } => PlayerCommand::LoadAt {
-                path,
-                position: Duration::from_millis(position_ms),
-            },
-            Self::Toggle => PlayerCommand::Toggle,
-            Self::Stop => PlayerCommand::Stop,
-        }
-    }
 }
 
 impl From<PlayerEvent> for IpcEvent {
@@ -291,12 +278,14 @@ impl IpcClient {
         list_scroll: usize,
         search_query: String,
         quit_marked: bool,
+        queue: QueueSnapshot,
     ) -> anyhow::Result<()> {
         match self.call(IpcRequest::SetUiState {
             selected_track_path,
             list_scroll,
             search_query,
             quit_marked,
+            queue,
         })? {
             IpcResponse::Ok => Ok(()),
             IpcResponse::Error { message } => Err(anyhow::anyhow!(message)),
@@ -477,6 +466,7 @@ pub fn sync_ui_state(client: &Arc<Mutex<IpcClient>>, app: &crate::app::App) {
             app.list_scroll,
             app.search_query.clone(),
             app.quit_marked,
+            app.queue.snapshot(),
         );
     }
 }

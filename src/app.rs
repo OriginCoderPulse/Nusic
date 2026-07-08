@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::ipc::IpcClient;
+use crate::ipc::{IpcClient, IpcCommand};
 use crate::library::{scan_path, spawn_watcher};
 use crate::paths::ensure_runtime_dir;
 use crate::player::{PlaybackState, PlayerCommand, PlayerEvent, PlayerQueue, RepeatMode};
@@ -196,6 +196,37 @@ impl App {
     }
 
     fn on_track_ended(&mut self) {
+        if self.ipc_client.is_some() {
+            self.mirror_track_advance();
+            return;
+        }
+        self.advance_after_track_end();
+    }
+
+    /// UI attached to daemon: playback is driven remotely; only mirror queue state.
+    fn mirror_track_advance(&mut self) {
+        if self.queue.repeat_mode() == RepeatMode::One {
+            if let Some(track) = self.queue.current_track() {
+                self.set_now_playing(track.path.clone());
+                self.reload_lyrics();
+            }
+            return;
+        }
+
+        if self.queue.next().is_some() {
+            if let Some(track) = self.queue.current_track() {
+                self.set_now_playing(track.path.clone());
+                self.reload_lyrics();
+                self.sync_selection_to_current();
+            }
+        } else {
+            self.playback.state = PlaybackState::Stopped;
+            self.playback.position = Duration::ZERO;
+        }
+    }
+
+    /// Standalone UI or background daemon: advance playback locally.
+    fn advance_after_track_end(&mut self) {
         if self.queue.repeat_mode() == RepeatMode::One {
             if let Some(track) = self.queue.current_track() {
                 let path = track.path.clone();
@@ -211,6 +242,34 @@ impl App {
 
         self.playback.state = PlaybackState::Stopped;
         self.playback.position = Duration::ZERO;
+    }
+
+    pub fn apply_ipc_command(&mut self, cmd: IpcCommand) {
+        match cmd {
+            IpcCommand::Load { path } => self.load_track_at(path, None),
+            IpcCommand::LoadAt { path, position_ms } => {
+                self.load_track_at(path, Some(Duration::from_millis(position_ms)))
+            }
+            IpcCommand::Toggle => {
+                let _ = self.cmd_tx.send(PlayerCommand::Toggle);
+            }
+            IpcCommand::Stop => self.stop_playback(),
+        }
+    }
+
+    fn load_track_at(&mut self, path: PathBuf, position: Option<Duration>) {
+        self.queue.set_current_by_path(&path);
+        self.set_now_playing(path.clone());
+        self.lyrics = crate::library::load_for_track(&path);
+        self.sync_selection_to_current();
+        match position {
+            Some(position) => {
+                let _ = self.cmd_tx.send(PlayerCommand::LoadAt { path, position });
+            }
+            None => {
+                let _ = self.cmd_tx.send(PlayerCommand::Load(path));
+            }
+        }
     }
 
     pub fn shutdown(&self) {
@@ -314,10 +373,18 @@ impl App {
             self.queue.set_repeat_mode(RepeatMode::Off);
         }
         self.queue.set_shuffle(enabled);
+        self.sync_queue_to_daemon();
     }
 
     pub fn cycle_repeat(&mut self) {
         self.queue.cycle_repeat();
+        self.sync_queue_to_daemon();
+    }
+
+    fn sync_queue_to_daemon(&self) {
+        if let Some(client) = &self.ipc_client {
+            crate::ipc::sync_ui_state(client, self);
+        }
     }
 
     pub fn adjust_volume(&mut self, delta: f32) {
@@ -470,8 +537,7 @@ impl App {
         watch_library: bool,
     ) -> Self {
         let tracks = scan_path(&snapshot.load_path);
-        let mut queue =
-            PlayerQueue::new(tracks, snapshot.queue.shuffle, snapshot.queue.repeat);
+        let mut queue = PlayerQueue::new(tracks, false, RepeatMode::Off);
         queue.restore_snapshot(&snapshot.queue);
 
         let resync_rx = if watch_library {
@@ -561,7 +627,7 @@ impl App {
         if state == PlaybackState::Paused {
             self.pending_pause = true;
         }
-        let _ = self.cmd_tx.send(PlayerCommand::LoadAt { path, position });
+        self.load_track_at(path, Some(position));
     }
 
     pub fn spawn_background_daemon(&self) -> anyhow::Result<()> {
