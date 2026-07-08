@@ -4,7 +4,7 @@
 
 **A fast, beautiful terminal music player for your local library**
 
-[![Version](https://img.shields.io/badge/version-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.1.3)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.0)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-installation)
@@ -17,15 +17,16 @@
 
 ## ✨ Features
 
-| | |
-|---|---|
-| 🖥️ **Terminal UI** | Built with [ratatui](https://github.com/ratatui/ratatui) — responsive layout, rounded panels, live spectrum |
-| 🎧 **Local playback** | MP3, FLAC, OGG, Opus, M4A, AAC, WAV, AIFF and more via Symphonia |
-| 📂 **Auto library scan** | Watches `~/.music` — drop files in and they appear instantly |
-| 🔀 **Smart queue** | Shuffle from current track, repeat off / all / one |
-| 🔊 **System volume** | Adjust macOS / Linux system volume from the keyboard |
-| 📝 **Lyrics** | Side-by-side `.lrc` sync when a matching file exists |
-| 🏷️ **Metadata** | Reads embedded tags; falls back to `Artist - Title` filename parsing |
+|                          |                                                                                                             |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| 🖥️ **Terminal UI**       | Built with [ratatui](https://github.com/ratatui/ratatui) — responsive layout, rounded panels, live spectrum |
+| 🎧 **Local playback**    | MP3, FLAC, OGG, Opus, M4A, AAC, WAV, AIFF and more via Symphonia                                            |
+| 📂 **Auto library scan** | Watches `~/.music` — drop files in and they appear instantly                                                |
+| 🔀 **Smart queue**       | Shuffle from current track, repeat off / all / one                                                          |
+| 🔊 **System volume**     | Adjust macOS / Linux system volume from the keyboard                                                        |
+| 📝 **Lyrics**            | Side-by-side `.lrc` sync when a matching file exists                                                        |
+| 🏷️ **Metadata**          | Reads embedded tags; falls back to `Artist - Title` filename parsing                                        |
+| 📌 **Background play**   | Pin mode + daemon — quit the UI without stopping music; re-enter with full state restored                   |
 
 ---
 
@@ -69,58 +70,77 @@ cargo install --path .
 
 > 💡 **Tip:** Files without embedded tags (common with some download services) are parsed from filenames like `Artist - Title.ext`.
 
+### Background playback
+
+1. Press **`Shift+P`** to toggle **Pin** — the panel title becomes `Nusic · Pin`.
+2. Press **`q`** — the UI closes; music keeps playing in the background.
+3. Run **`nusic`** again — re-attach with the same progress, queue, selection, lyrics, and Pin state.
+4. Run **`nusic --exit`** from any shell to stop background playback.
+
+Without Pin, **`q`** quits and stops playback. **`Ctrl+s`** always stops playback and exits.
+
 ---
 
 ## ⌨️ Keyboard shortcuts
 
 ### Playback
 
-| Key | Action |
-|-----|--------|
-| `Space` | Play / Pause |
-| `Enter` | Play selected track |
-| `n` / `]` | Next track |
-| `p` / `[` | Previous track |
+| Key       | Action              |
+| --------- | ------------------- |
+| `Space`   | Play / Pause        |
+| `Enter`   | Play selected track |
+| `n` / `]` | Next track          |
+| `p` / `[` | Previous track      |
 
 ### Navigation
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Move selection down |
-| `k` / `↑` | Move selection up |
-| `Ctrl+u` / `Ctrl+d` | Scroll half a page |
-| `PgUp` / `PgDn` | Jump 10 items |
-| `Home` / `End` | First / last track |
+| Key                 | Action              |
+| ------------------- | ------------------- |
+| `j` / `↓`           | Move selection down |
+| `k` / `↑`           | Move selection up   |
+| `Ctrl+u` / `Ctrl+d` | Scroll half a page  |
+| `PgUp` / `PgDn`     | Jump 10 items       |
+| `Home` / `End`      | First / last track  |
 
 ### Modes & volume
 
-| Key | Action |
-|-----|--------|
-| `s` | Toggle shuffle (random from current track) |
-| `r` | Cycle repeat: Off → All → One |
-| `h` `l` `←` `→` `,` `.` | System volume down / up |
-| `+` / `-` | System volume up / down |
+| Key                     | Action                                     |
+| ----------------------- | ------------------------------------------ |
+| `s`                     | Toggle shuffle (random from current track) |
+| `r`                     | Cycle repeat: Off → All → One              |
+| `h` `l` `←` `→` `,` `.` | System volume down / up                    |
+| `+` / `-`               | System volume up / down                    |
 
 ### Other
 
-| Key | Action |
-|-----|--------|
-| `/` | Search library |
-| `o` | Open music folder |
-| `K` | Show / hide help |
-| `q` / `Esc` / `Ctrl+s` | Quit |
+| Key                    | Action            |
+| ---------------------- | ----------------- |
+| `/`                    | Search library    |
+| `o`                    | Open music folder |
+| `K`                    | Show / hide help                          |
+| `Shift+P`              | Toggle Pin (background-on-quit mark)      |
+| `q` / `Esc`            | Quit (background if Pin is active)        |
+| `Ctrl+s`               | Quit and stop playback                    |
+
+### CLI
+
+| Command         | Action                          |
+| --------------- | ------------------------------- |
+| `nusic`         | Launch UI (attach if background) |
+| `nusic --exit`  | Stop background player          |
+| `nusic --version` | Print version                 |
 
 ---
 
 ## 🔀 Playback modes
 
-| Mode | Behavior |
-|------|----------|
+| Mode            | Behavior                                                                                      |
+| --------------- | --------------------------------------------------------------------------------------------- |
 | **Shuffle off** | Tracks play in library order; next/prev follow the list (wraps at ends when repeat-all is on) |
-| **Shuffle on** | Queue reshuffles from the **current** track — you stay on what you're listening to |
-| **Repeat off** | Stops at the last track |
-| **Repeat all** | Loops the entire queue |
-| **Repeat one** | Repeats the current track (disables shuffle) |
+| **Shuffle on**  | Queue reshuffles from the **current** track — you stay on what you're listening to            |
+| **Repeat off**  | Stops at the last track                                                                       |
+| **Repeat all**  | Loops the entire queue                                                                        |
+| **Repeat one**  | Repeats the current track (disables shuffle)                                                  |
 
 ---
 
@@ -170,6 +190,9 @@ Project layout:
 src/
 ├── app.rs            # application state & event loop
 ├── audio/            # rodio + symphonia decoder
+├── daemon.rs         # background player process
+├── ipc.rs            # daemon ↔ UI communication
+├── session.rs        # playback session snapshots
 ├── library/          # scan, metadata, lyrics, file watcher
 ├── player/           # queue, shuffle, repeat
 ├── system_volume.rs  # macOS / Linux volume control

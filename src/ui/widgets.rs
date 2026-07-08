@@ -37,8 +37,13 @@ pub fn panel_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
         .padding(Padding::new(ROW_PAD, ROW_PAD, 0, 0))
 }
 
-pub fn app_header(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let block = panel_block("Nusic", theme);
+pub fn app_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let panel_title = if app.quit_marked {
+        "Nusic · Pin"
+    } else {
+        "Nusic"
+    };
+    let block = panel_block(panel_title, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(
@@ -80,10 +85,16 @@ pub fn song_info(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(block, area);
 
     let track = app
-        .filtered_indices
-        .get(app.list_selection)
-        .and_then(|&i| app.queue.tracks().get(i))
-        .or_else(|| app.queue.current_track());
+        .playback
+        .current_path
+        .as_ref()
+        .and_then(|path| app.queue.tracks().iter().find(|t| t.path.as_path() == path.as_path()))
+        .or_else(|| app.queue.current_track())
+        .or_else(|| {
+            app.filtered_indices
+                .get(app.list_selection)
+                .and_then(|&i| app.queue.tracks().get(i))
+        });
 
     let (title, artist, album, duration): (String, String, String, String) =
         if let Some(t) = track {

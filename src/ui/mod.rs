@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, ExitAction};
 
 use layout::{split_left, split_main, split_top};
 use theme::Theme;
@@ -63,7 +63,7 @@ pub fn run(mut app: App) -> anyhow::Result<()> {
             }
         }
 
-        if app.should_quit {
+        if app.exit_action != ExitAction::None {
             break;
         }
     }
@@ -76,7 +76,16 @@ pub fn run(mut app: App) -> anyhow::Result<()> {
         crossterm::terminal::LeaveAlternateScreen,
     )?;
 
-    app.shutdown();
+    match app.exit_action {
+        ExitAction::Detach => {
+            if let Some(client) = &app.ipc_client {
+                crate::ipc::sync_ui_state(client, &app);
+            }
+        }
+        ExitAction::Quit | ExitAction::None => {
+            app.shutdown();
+        }
+    }
 
     Ok(())
 }
@@ -91,7 +100,7 @@ fn draw(frame: &mut Frame, app: &mut App, dt: Duration) {
     let (left, right) = split_top(top);
     let (header, info, list) = split_left(left);
 
-    app_header(frame, header, &theme);
+    app_header(frame, header, app, &theme);
     song_info(frame, info, app, &theme);
     track_list(frame, list, app, &theme);
     lyrics_panel(frame, right, app, &theme);
@@ -128,8 +137,9 @@ fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("/", "Search library"),
         ("o", "Open music folder"),
         ("K", "Show / hide this help"),
-        ("q / Esc", "Quit"),
-        ("Ctrl+s", "Quit"),
+        ("Shift+P", "Toggle background-on-quit mark"),
+        ("q / Esc", "Quit (background if marked)"),
+        ("Ctrl+s", "Quit and stop playback"),
     ];
 
     let lines: Vec<Line> = rows
@@ -214,17 +224,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
 
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
-            app.should_quit = true;
-            return true;
-        }
+        KeyCode::Char('q') | KeyCode::Esc => return app.try_quit(),
+        KeyCode::Char('P') => app.toggle_quit_mark(),
         KeyCode::Char(' ') => app.toggle_playback(),
         KeyCode::Char('n') | KeyCode::Char(']') => {
             app.next_track();
         }
         KeyCode::Char('p') | KeyCode::Char('[') => app.prev_track(),
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.should_quit = true;
+            app.exit_action = ExitAction::Quit;
             return true;
         }
         KeyCode::Char('s') => app.toggle_shuffle(),

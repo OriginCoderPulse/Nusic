@@ -4,7 +4,7 @@
 
 **在终端里优雅地播放本地音乐**
 
-[![Version](https://img.shields.io/badge/版本-0.1.3-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.1.3)
+[![Version](https://img.shields.io/badge/版本-0.2.0-blue?style=flat-square)](https://github.com/OriginCoderPulse/Nusic/releases/tag/v0.2.0)
 [![License](https://img.shields.io/badge/协议-MIT-green?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-安装)
@@ -26,6 +26,7 @@
 | 🔊 **系统音量** | 快捷键直接调节 macOS / Linux 系统音量 |
 | 📝 **歌词同步** | 同目录 `.lrc` 文件自动加载，随播放滚动高亮 |
 | 🏷️ **元数据** | 读取内嵌标签；缺失时从 `艺术家 - 标题` 文件名解析 |
+| 📌 **后台播放** | Pin 标记 + 后台 daemon — 退出界面后继续播放，再次进入可恢复状态 |
 
 ---
 
@@ -69,6 +70,15 @@ cargo install --path .
 
 > 💡 **提示：** 部分下载来源的文件没有内嵌标签（例如某些平台的 M4A），程序会从 `艺术家 - 标题.ext` 格式的文件名解析信息。
 
+### 后台播放
+
+1. 按 **`Shift+P`** 切换 **Pin** 标记 — 面板标题显示 `Nusic · Pin`。
+2. 按 **`q`** — 关闭界面，音乐在后台继续播放。
+3. 再次运行 **`nusic`** — 重新进入并恢复进度、队列、选中项、歌词与 Pin 状态。
+4. 在终端运行 **`nusic --exit`** — 停止后台播放。
+
+未打 Pin 时，**`q`** 会退出并停止播放。**`Ctrl+s`** 始终停止播放并退出。
+
 ---
 
 ## ⌨️ 快捷键
@@ -108,7 +118,17 @@ cargo install --path .
 | `/` | 搜索曲库 |
 | `o` | 打开音乐目录 |
 | `K` | 显示 / 隐藏帮助 |
-| `q` / `Esc` / `Ctrl+s` | 退出 |
+| `Shift+P` | 切换 Pin（退出时后台播放标记） |
+| `q` / `Esc` | 退出（已 Pin 则后台继续播放） |
+| `Ctrl+s` | 退出并停止播放 |
+
+### 命令行
+
+| 命令 | 功能 |
+|------|------|
+| `nusic` | 启动界面（有后台时自动 attach） |
+| `nusic --exit` | 停止后台播放 |
+| `nusic --version` | 显示版本 |
 
 ---
 
@@ -170,6 +190,9 @@ cargo build --release
 src/
 ├── app.rs            # 应用状态与事件循环
 ├── audio/            # rodio + symphonia 解码
+├── daemon.rs         # 后台播放进程
+├── ipc.rs            # daemon 与 UI 通信
+├── session.rs        # 播放会话快照
 ├── library/          # 扫描、元数据、歌词、文件监听
 ├── player/           # 队列、随机、循环
 ├── system_volume.rs  # macOS / Linux 音量控制

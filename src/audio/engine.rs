@@ -8,7 +8,7 @@ use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 
 use crate::player::{PlaybackState, PlayerCommand, PlayerEvent};
 
-use super::decoder::open_decoder;
+use super::decoder::{open_decoder, open_decoder_at};
 
 struct Engine {
     stream_handle: OutputStreamHandle,
@@ -43,9 +43,17 @@ impl Engine {
     }
 
     fn load(&mut self, path: PathBuf, evt_tx: &Sender<PlayerEvent>) {
+        self.load_at(path, Duration::ZERO, evt_tx);
+    }
+
+    fn load_at(&mut self, path: PathBuf, position: Duration, evt_tx: &Sender<PlayerEvent>) {
         self.stop_internal();
 
-        let source = match open_decoder(&path) {
+        let source = match if position.is_zero() {
+            open_decoder(&path)
+        } else {
+            open_decoder_at(&path, position)
+        } {
             Ok(s) => s,
             Err(msg) => {
                 let _ = evt_tx.send(PlayerEvent::Error(msg));
@@ -67,13 +75,14 @@ impl Engine {
         sink.append(source);
         self.sink = Some(sink);
         self.current_path = Some(path);
-        self.paused_at = Duration::ZERO;
+        self.paused_at = position;
         self.play_started = Instant::now();
         self.state = PlaybackState::Playing;
 
         let _ = evt_tx.send(PlayerEvent::Loaded {
             duration: self.duration,
         });
+        let _ = evt_tx.send(PlayerEvent::Position(position));
         let _ = evt_tx.send(PlayerEvent::StateChanged(self.state));
     }
 
@@ -163,6 +172,9 @@ pub fn spawn_engine() -> anyhow::Result<(Sender<PlayerCommand>, Receiver<PlayerE
             while let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     PlayerCommand::Load(path) => engine.load(path, &evt),
+                    PlayerCommand::LoadAt { path, position } => {
+                        engine.load_at(path, position, &evt);
+                    }
                     PlayerCommand::Toggle => engine.toggle(&evt),
                     PlayerCommand::Stop => engine.stop(&evt),
                     PlayerCommand::Shutdown => return,

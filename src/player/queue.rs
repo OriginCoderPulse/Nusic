@@ -2,9 +2,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::library::Track;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::library::Track;
+use crate::session::QueueSnapshot;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepeatMode {
     Off,
     One,
@@ -113,10 +116,55 @@ impl PlayerQueue {
         } else {
             self.order = (0..self.tracks.len()).collect();
         }
+        self.sanitize_after_resync();
     }
 
     pub fn clear_current(&mut self) {
         self.current = None;
+    }
+
+    pub fn snapshot(&self) -> QueueSnapshot {
+        QueueSnapshot::from_paths(
+            self.order
+                .iter()
+                .filter_map(|&i| self.tracks.get(i).map(|t| t.path.clone()))
+                .collect(),
+            self.current_track().map(|t| t.path.clone()),
+            self.shuffle,
+            self.repeat,
+        )
+    }
+
+    pub fn restore_snapshot(&mut self, snap: &QueueSnapshot) {
+        self.shuffle = snap.shuffle;
+        self.repeat = snap.repeat;
+        if let Some((order, current)) = snap.legacy_indices() {
+            self.order = order.to_vec();
+            self.current = current;
+        } else {
+            self.order = snap
+                .order_paths
+                .iter()
+                .filter_map(|path| self.tracks.iter().position(|t| t.path == *path))
+                .collect();
+            self.current = snap.current_path.as_ref().and_then(|path| {
+                self.tracks.iter().position(|t| t.path == *path)
+            });
+        }
+        self.sanitize_after_resync();
+    }
+
+    fn sanitize_after_resync(&mut self) {
+        let n = self.tracks.len();
+        self.order.retain(|&i| i < n);
+        if self.order.is_empty() && n > 0 {
+            self.order = (0..n).collect();
+        }
+        if let Some(cur) = self.current {
+            if cur >= n {
+                self.current = None;
+            }
+        }
     }
 
     pub fn select(&mut self, index: usize) -> Option<&Track> {

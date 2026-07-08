@@ -7,7 +7,7 @@ use rodio::Source;
 use symphonia::core::audio::{AudioBufferRef, SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
-use symphonia::core::formats::{FormatOptions, FormatReader};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -49,6 +49,10 @@ pub struct SymphoniaSource {
 }
 
 pub fn open_decoder(path: &Path) -> Result<SymphoniaSource, String> {
+    open_decoder_at(path, Duration::ZERO)
+}
+
+pub fn open_decoder_at(path: &Path, seek_to: Duration) -> Result<SymphoniaSource, String> {
     let data = fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let drm_protected = is_fairplay_drm(&data);
     let cursor = Cursor::new(data);
@@ -90,14 +94,25 @@ pub fn open_decoder(path: &Path) -> Result<SymphoniaSource, String> {
         })?;
 
     let track_id = track.id;
+    let time_base = track.codec_params.time_base;
+    let n_frames = track.codec_params.n_frames;
     let mut decoder = get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| decode_error(path, e))?;
 
-    let total_duration = track
-        .codec_params
-        .time_base
-        .zip(track.codec_params.n_frames)
+    if !seek_to.is_zero() {
+        let seek = SeekTo::Time {
+            time: duration_to_time(seek_to),
+            track_id: Some(track_id),
+        };
+        if let Err(e) = probed.format.seek(SeekMode::Accurate, seek) {
+            return Err(decode_error(path, e));
+        }
+        decoder.reset();
+    }
+
+    let total_duration = time_base
+        .zip(n_frames)
         .map(|(base, frames)| time_to_duration(base.calc_time(frames)));
 
     let mut decode_errors = 0usize;
@@ -169,6 +184,13 @@ fn decode_error(path: &Path, err: Error) -> String {
 fn time_to_duration(time: Time) -> Duration {
     let secs = time.seconds as f64 + if time.frac > 0.0 { 1.0 / time.frac as f64 } else { 0.0 };
     Duration::from_secs_f64(secs)
+}
+
+fn duration_to_time(duration: Duration) -> Time {
+    Time {
+        seconds: duration.as_secs(),
+        frac: 0.0,
+    }
 }
 
 fn interleaved_f32(decoded: AudioBufferRef<'_>, spec: &SignalSpec) -> SampleBuffer<f32> {

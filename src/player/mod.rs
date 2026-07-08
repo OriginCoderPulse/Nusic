@@ -5,7 +5,9 @@ pub use queue::{PlayerQueue, RepeatMode};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlaybackState {
     #[default]
     Stopped,
@@ -16,6 +18,7 @@ pub enum PlaybackState {
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
     Load(PathBuf),
+    LoadAt { path: PathBuf, position: Duration },
     Toggle,
     Stop,
     Shutdown,

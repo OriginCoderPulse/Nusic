@@ -1,10 +1,21 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::ipc::IpcClient;
 use crate::library::{scan_path, spawn_watcher};
+use crate::paths::ensure_runtime_dir;
 use crate::player::{PlaybackState, PlayerCommand, PlayerEvent, PlayerQueue, RepeatMode};
+use crate::session::{write_session, SessionSnapshot};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAction {
+    None,
+    Quit,
+    Detach,
+}
 
 #[derive(Debug, Clone)]
 pub struct PlaybackInfo {
@@ -38,7 +49,9 @@ pub struct App {
     pub search_query: String,
     pub load_path: PathBuf,
     pub status_message: Option<String>,
-    pub should_quit: bool,
+    pub exit_action: ExitAction,
+    /// Shift+P: when true, q exits UI and keeps playback in background.
+    pub quit_marked: bool,
     pub tick: u64,
     /// Smoothed bar heights (0..max level), updated every render frame.
     pub spectrum_bars: Vec<f32>,
@@ -49,9 +62,11 @@ pub struct App {
     pub lyrics: Option<Vec<crate::library::LrcLine>>,
     pub list_scroll: usize,
     pub list_viewport: usize,
+    pending_pause: bool,
     resync_rx: Receiver<()>,
     cmd_tx: Sender<PlayerCommand>,
     evt_rx: Receiver<PlayerEvent>,
+    pub ipc_client: Option<Arc<Mutex<IpcClient>>>,
 }
 
 impl App {
@@ -80,7 +95,8 @@ impl App {
             search_query: String::new(),
             load_path: path,
             status_message: None,
-            should_quit: false,
+            exit_action: ExitAction::None,
+            quit_marked: false,
             tick: 0,
             spectrum_bars: Vec::new(),
             spectrum_targets: Vec::new(),
@@ -89,9 +105,11 @@ impl App {
             lyrics: None,
             list_scroll: 0,
             list_viewport: 1,
+            pending_pause: false,
             resync_rx,
             cmd_tx,
             evt_rx,
+            ipc_client: None,
         };
 
         if !app.queue.is_empty() {
@@ -124,39 +142,55 @@ impl App {
             self.resync_library();
         }
 
+        for event in self.drain_player_events() {
+            let _ = event;
+        }
+    }
+
+    pub fn drain_player_events(&mut self) -> Vec<PlayerEvent> {
+        let mut events = Vec::new();
         while let Ok(event) = self.evt_rx.try_recv() {
-            match event {
-                PlayerEvent::Loaded { duration } => {
-                    self.playback.duration = duration;
+            self.apply_player_event(&event);
+            events.push(event);
+        }
+        events
+    }
+
+    pub fn apply_player_event(&mut self, event: &PlayerEvent) {
+        match event {
+            PlayerEvent::Loaded { duration } => {
+                self.playback.duration = *duration;
+                self.playback.position_anchor = Instant::now();
+                self.status_message = None;
+                self.reload_lyrics();
+                if self.pending_pause {
+                    self.pending_pause = false;
+                    let _ = self.cmd_tx.send(PlayerCommand::Toggle);
+                }
+            }
+            PlayerEvent::StateChanged(state) => {
+                let was_playing = self.playback.state == PlaybackState::Playing;
+                if was_playing && *state == PlaybackState::Paused {
+                    self.playback.position = self.playback_position();
+                }
+                self.playback.state = *state;
+                if *state == PlaybackState::Playing {
+                    self.playback.position_anchor = Instant::now();
+                }
+                if *state == PlaybackState::Stopped {
                     self.playback.position = Duration::ZERO;
-                    self.playback.position_anchor = Instant::now();
-                    self.status_message = None;
-                    self.reload_lyrics();
+                    self.playback.duration = Duration::ZERO;
                 }
-                PlayerEvent::StateChanged(state) => {
-                    let was_playing = self.playback.state == PlaybackState::Playing;
-                    if was_playing && state == PlaybackState::Paused {
-                        self.playback.position = self.playback_position();
-                    }
-                    self.playback.state = state;
-                    if state == PlaybackState::Playing {
-                        self.playback.position_anchor = Instant::now();
-                    }
-                    if state == PlaybackState::Stopped {
-                        self.playback.position = Duration::ZERO;
-                        self.playback.duration = Duration::ZERO;
-                    }
-                }
-                PlayerEvent::Position(pos) => {
-                    self.playback.position = pos;
-                    self.playback.position_anchor = Instant::now();
-                }
-                PlayerEvent::TrackEnded => {
-                    self.on_track_ended();
-                }
-                PlayerEvent::Error(msg) => {
-                    self.status_message = Some(msg);
-                }
+            }
+            PlayerEvent::Position(pos) => {
+                self.playback.position = *pos;
+                self.playback.position_anchor = Instant::now();
+            }
+            PlayerEvent::TrackEnded => {
+                self.on_track_ended();
+            }
+            PlayerEvent::Error(msg) => {
+                self.status_message = Some(msg.clone());
             }
         }
     }
@@ -402,5 +436,171 @@ impl App {
         self.lyrics = None;
         self.spectrum_seed = self.spectrum_seed.wrapping_add(1);
         self.spectrum_reseed_acc = 0.0;
+    }
+
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let selected_track_path = self
+            .filtered_indices
+            .get(self.list_selection)
+            .and_then(|&i| self.queue.tracks().get(i).map(|t| t.path.clone()));
+
+        SessionSnapshot {
+            load_path: self.load_path.clone(),
+            playback_state: self.playback.state,
+            position_ms: self.playback_position().as_millis() as u64,
+            duration_ms: self.playback.duration.as_millis() as u64,
+            current_path: self
+                .queue
+                .current_track()
+                .map(|t| t.path.clone())
+                .or_else(|| self.playback.current_path.clone()),
+            queue: self.queue.snapshot(),
+            selected_track_path,
+            legacy_list_selection: 0,
+            list_scroll: self.list_scroll,
+            search_query: self.search_query.clone(),
+            quit_marked: self.quit_marked,
+        }
+    }
+
+    pub fn from_snapshot(
+        snapshot: SessionSnapshot,
+        cmd_tx: Sender<PlayerCommand>,
+        evt_rx: Receiver<PlayerEvent>,
+        watch_library: bool,
+    ) -> Self {
+        let tracks = scan_path(&snapshot.load_path);
+        let mut queue =
+            PlayerQueue::new(tracks, snapshot.queue.shuffle, snapshot.queue.repeat);
+        queue.restore_snapshot(&snapshot.queue);
+
+        let resync_rx = if watch_library {
+            spawn_watcher(snapshot.load_path.clone())
+        } else {
+            let (_tx, rx) = crossbeam_channel::bounded(0);
+            rx
+        };
+        let spectrum_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
+        let mut app = Self {
+            queue,
+            playback: PlaybackInfo {
+                state: snapshot.playback_state,
+                position: snapshot.position(),
+                duration: snapshot.duration(),
+                current_path: snapshot.current_path.clone(),
+                position_anchor: Instant::now(),
+            },
+            list_selection: 0,
+            filtered_indices: Vec::new(),
+            search_mode: false,
+            help_mode: false,
+            search_query: snapshot.search_query.clone(),
+            load_path: snapshot.load_path.clone(),
+            status_message: None,
+            exit_action: ExitAction::None,
+            quit_marked: snapshot.quit_marked,
+            tick: 0,
+            spectrum_bars: Vec::new(),
+            spectrum_targets: Vec::new(),
+            spectrum_seed,
+            spectrum_reseed_acc: 0.0,
+            lyrics: None,
+            list_scroll: snapshot.list_scroll,
+            list_viewport: 1,
+            pending_pause: false,
+            resync_rx,
+            cmd_tx,
+            evt_rx,
+            ipc_client: None,
+        };
+
+        app.apply_filter();
+        app.restore_list_selection(&snapshot);
+
+        if let Some(path) = snapshot.current_path {
+            app.set_now_playing(path.clone());
+            app.lyrics = crate::library::load_for_track(&path);
+        }
+
+        app
+    }
+
+    fn restore_list_selection(&mut self, snapshot: &SessionSnapshot) {
+        if let Some(path) = &snapshot.selected_track_path {
+            if let Some(pos) = self.filtered_indices.iter().position(|&i| {
+                self.queue
+                    .tracks()
+                    .get(i)
+                    .is_some_and(|t| t.path == *path)
+            }) {
+                self.list_selection = pos;
+                return;
+            }
+        } else if !self.filtered_indices.is_empty() {
+            self.list_selection = snapshot
+                .legacy_list_selection
+                .min(self.filtered_indices.len().saturating_sub(1));
+            return;
+        }
+        self.sync_selection_to_current();
+    }
+
+    pub fn bootstrap_playback(&mut self) {
+        let Some(path) = self.playback.current_path.clone() else {
+            return;
+        };
+        let position = self.playback.position;
+        let state = self.playback.state;
+        if state == PlaybackState::Stopped && position.is_zero() {
+            return;
+        }
+        if state == PlaybackState::Paused {
+            self.pending_pause = true;
+        }
+        let _ = self.cmd_tx.send(PlayerCommand::LoadAt { path, position });
+    }
+
+    pub fn spawn_background_daemon(&self) -> anyhow::Result<()> {
+        let runtime = ensure_runtime_dir()?;
+        let session_path = runtime.join(format!("handoff-{}.json", std::process::id()));
+        write_session(&session_path, &self.snapshot())?;
+        crate::ipc::spawn_detached_daemon(&session_path)?;
+        if !crate::ipc::wait_for_daemon(Duration::from_secs(5)) {
+            anyhow::bail!("background player failed to start");
+        }
+        Ok(())
+    }
+
+    pub fn toggle_quit_mark(&mut self) {
+        self.quit_marked = !self.quit_marked;
+    }
+
+    /// Quit or detach depending on `quit_marked`. Returns true when the UI should close.
+    pub fn try_quit(&mut self) -> bool {
+        if !self.quit_marked {
+            self.exit_action = ExitAction::Quit;
+            return true;
+        }
+
+        if self.ipc_client.is_some() {
+            self.exit_action = ExitAction::Detach;
+            return true;
+        }
+
+        match self.spawn_background_daemon() {
+            Ok(()) => {
+                self.shutdown();
+                self.exit_action = ExitAction::Detach;
+                true
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Background play failed: {e}"));
+                false
+            }
+        }
     }
 }
